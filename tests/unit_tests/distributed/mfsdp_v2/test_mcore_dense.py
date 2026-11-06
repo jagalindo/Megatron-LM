@@ -10,7 +10,7 @@ import transformer_engine.pytorch as te
 from torch.distributed.tensor import DTensor
 from transformer_engine.pytorch.tensor.mxfp8_tensor import MXFP8Tensor
 
-import megatron.core.distributed.fsdp.mcore_fsdp_adapter as mcore_fsdp_adapter
+import megatron.core.distributed.fsdp.mcore_adapter_v2 as mcore_adapter_v2
 from megatron.core.distributed import DistributedDataParallelConfig
 from megatron.core.distributed.fsdp.mcore_fsdp_adapter import FullyShardedDataParallel
 from megatron.core.distributed.fsdp.src.megatron_fsdp.experimental import (
@@ -224,13 +224,13 @@ def test_nccl_ub_enables_symmetric_memory(process_group_collection, monkeypatch)
         device="cuda", dtype=config.params_dtype
     )
     fully_shard_context_calls = []
-    original_fully_shard_context = mcore_fsdp_adapter.fully_shard_context
+    original_fully_shard_context = mcore_adapter_v2.fully_shard_context
 
     def record_fully_shard_context(context):
         fully_shard_context_calls.append(context.use_symmetric_memory)
         return original_fully_shard_context(context)
 
-    monkeypatch.setattr(mcore_fsdp_adapter, "fully_shard_context", record_fully_shard_context)
+    monkeypatch.setattr(mcore_adapter_v2, "fully_shard_context", record_fully_shard_context)
     FullyShardedDataParallel(
         config=config,
         ddp_config=DistributedDataParallelConfig(
@@ -373,27 +373,45 @@ def test_finish_grad_sync_waits_for_delayed_wgrad(process_group_collection, dist
         graph.replay()
 
 
-def test_delayed_wgrad_matches_immediate(process_group_collection, distributed_setup):
+@pytest.mark.parametrize("init_model_with_meta_device", [False, True], ids=["cuda", "meta"])
+def test_delayed_wgrad_matches_immediate(
+    process_group_collection, distributed_setup, init_model_with_meta_device
+):
     """Delaying weight gradients preserves training losses with microbatch accumulation."""
     num_microbatches = 3
     config = TransformerConfig(
-        num_layers=1, hidden_size=16, num_attention_heads=4, bf16=True, params_dtype=torch.bfloat16
+        num_layers=1,
+        hidden_size=16,
+        num_attention_heads=4,
+        bf16=True,
+        params_dtype=torch.bfloat16,
+        init_model_with_meta_device=init_model_with_meta_device,
     )
+    # Every rank initializes both layers with the same weights, also when the adapter
+    # materializes the delayed layer from the meta device.
+    initial_weight = torch.randn(16, 16, generator=torch.Generator().manual_seed(0))
 
-    def build_layer(delay_wgrad_compute):
+    @torch.no_grad()
+    def init_method(weight):
+        weight.copy_(initial_weight)
+
+    def build_layer(delay_wgrad_compute, device):
         return te.Linear(
             16,
             16,
             bias=False,
+            init_method=init_method,
             params_dtype=config.params_dtype,
-            device=distributed_setup.device,
+            device=device,
             delay_wgrad_compute=delay_wgrad_compute,
             fuse_wgrad_accumulation=False,
         )
 
-    immediate_layer = build_layer(delay_wgrad_compute=False)
-    delayed_layer = build_layer(delay_wgrad_compute=True)
-    delayed_layer.load_state_dict(immediate_layer.state_dict())
+    immediate_layer = build_layer(delay_wgrad_compute=False, device=distributed_setup.device)
+    delayed_layer = build_layer(
+        delay_wgrad_compute=True,
+        device="meta" if init_model_with_meta_device else distributed_setup.device,
+    )
     # Both runs see the same inputs, with distinct data on each rank and microbatch.
     batches = [
         [
