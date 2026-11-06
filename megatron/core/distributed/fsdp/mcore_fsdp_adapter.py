@@ -207,6 +207,7 @@ class FullyShardedDataParallelV1(_BaseDataParallel):
         if not HAVE_MEGATRON_FSDP:
             raise IMPORT_MEGATRON_FSDP_ERROR
 
+        ddp_config.finalize()
         if config.moe_virtual_expert_load_balance:
             raise ValueError(
                 "MoonEP is not yet integrated with Megatron-FSDP v1. Supporting it requires "
@@ -627,6 +628,7 @@ class FullyShardedDataParallelV2(_BaseDataParallel):
             raise IMPORT_MEGATRON_FSDP_ERROR
         if pg_collection is None:
             raise ValueError("MFSDP v2 requires an explicit ProcessGroupCollection.")
+        ddp_config.finalize()
         FullyShardedDataParallelV2._validate_config(
             config, ddp_config, module, pg_collection, disable_bucketing
         )
