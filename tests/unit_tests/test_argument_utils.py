@@ -390,6 +390,15 @@ def test_validate_args_accepts_largest_seed(monkeypatch):
     validate_args(args)
 
 
+def test_validate_args_accepts_zero_experts(monkeypatch):
+    """--num-experts 0 still disables MoE, whatever --moe-router-topk is."""
+    args = _range_check_args(monkeypatch, num_experts=0, moe_router_topk=2)
+
+    validate_args(args)
+
+    assert args.num_experts is None
+
+
 @pytest.mark.parametrize(
     ("overrides", "error"),
     [

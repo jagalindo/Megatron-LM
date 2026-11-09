@@ -447,8 +447,9 @@ def _validate_numeric_ranges(args):
         f"--mtp-num-layers must be non-negative, got {args.mtp_num_layers}"
     )
 
-    # The router selects top-k of the experts with torch.topk.
-    if args.num_experts is not None:
+    # The router selects top-k of the experts with torch.topk. --num-experts 0 disables MoE
+    # (validate_args turns it into None further down), so it is not range-checked here.
+    if args.num_experts:
         assert 1 <= args.moe_router_topk <= args.num_experts, (
             f"--moe-router-topk must be between 1 and --num-experts ({args.num_experts}), "
             f"got {args.moe_router_topk}"
